@@ -4,7 +4,6 @@ metadata:
   annotations:
     kompose.cmd: /snap/kompose/19/kompose-linux-amd64 convert
     kompose.version: 1.21.0 (992df58d8)
-  creationTimestamp: null
   labels:
     io.kompose.service: web
   name: web
@@ -13,25 +12,47 @@ spec:
   selector:
     matchLabels:
       io.kompose.service: web
-  strategy: {}
   template:
     metadata:
       annotations:
         kompose.cmd: /snap/kompose/19/kompose-linux-amd64 convert
         kompose.version: 1.21.0 (992df58d8)
-      creationTimestamp: null
       labels:
         io.kompose.network/my_network: "true"
         io.kompose.service: web
     spec:
       containers:
-      - image: alexb853/web-image:v1.0.0-156-20240714-184459
-        imagePullPolicy: ""
-        name: web
+      - name: web
+        image: alexb853/web-image:v1.0.0-156-20240714-184459
+        imagePullPolicy: Always
         ports:
         - containerPort: 80
-        resources: {}
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "250m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        volumeMounts:
+        - mountPath: /usr/share/nginx/html
+          name: nginx-storage
+      volumes:
+      - name: nginx-storage
+        persistentVolumeClaim:
+          claimName: nginx-pvc
       restartPolicy: Always
-      serviceAccountName: ""
-      volumes: null
-status: {}
+      serviceAccountName: default
+

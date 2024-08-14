@@ -1,0 +1,16 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: web-scaledobject
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web
+  triggers:
+  - type: azure-queue
+    metadata:
+      queueName: my-queue
+      connection: my-connection-string
+      queueLength: '10'
+
