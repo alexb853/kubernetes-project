@@ -1,5 +1,5 @@
 pipeline {
- agent {
+  agent {
     kubernetes {
       yaml '''
         apiVersion: v1
@@ -13,119 +13,90 @@ pipeline {
             command:
             - cat
             tty: true
+          - name: docker
+            image: docker:latest
+            command:
+            - cat
+            tty: true
+            volumeMounts:
+             - mountPath: /var/run/docker.sock
+               name: docker-sock
+          volumes:
+          - name: docker-sock
+            hostPath:
+              path: /var/run/docker.sock
         '''
     }
- }
-   options {
+  }
+
+  options {
         disableConcurrentBuilds()
         buildDiscarder(logRotator(daysToKeepStr: '30'))
         timestamps()
-   }
+    }
 
     environment {
-        POLYBOT_IMG_NAME = "dockerbot:${BUILD_NUMBER}"
-        NGINX_IMG = "nginx:alpine"
-        DOCKERHUB_CREDENTIALS = credentials('dockerhub') // Jenkins credentials ID
         APP_IMAGE_NAME = 'python-app-image'
         WEB_IMAGE_NAME = 'web-image'
         DOCKER_COMPOSE_FILE = 'docker-compose.yml'
         BUILD_DATE = new Date().format('yyyyMMdd-HHmmss')
-        IMAGE_TAG = "v1.0.0-${BUILD_NUMBER}-${BUILD_DATE}"
-        SNYK_TOKEN = credentials('snykAPI')
+        IMAGE_TAG = "v1.0-${BUILD_NUMBER}-${BUILD_DATE}"
+        SNYK_TOKEN = credentials('snyk-token')
         NEXUS_PROTOCOL = "http"
-        NEXUS_URL = "172.28.93.131:8888"
         NEXUS_REPOSITORY = "my-docker-repo"
         NEXUS_CREDENTIALS_ID = "nexus"
+        GIT_CREDENTIALS_ID = credentials('github')
     }
-     stages {
-        stage('Unit Tests') {
-            steps {
-                sh 'pip3 install pytest'
-                sh 'python3 -m pytest --junitxml=results.xml tests/*.py'
+
+    stages {
+        stage('Hello') {
+           steps {
+            wrap([$class: 'BuildUser']) {
+              greet()
             }
-            post {
-                always {
-                    junit allowEmptyResults: true, testResults: 'results.xml'
-                }
-            }
+           }
         }
+
         stage('Build Docker Image') {
             steps {
-                script {
-                    sh 'docker-compose -f ${DOCKER_COMPOSE_FILE} build'
-                }
-            }
-        }
-        stage('Snyk Container Test') {
-            steps {
-                 script {
-                    withCredentials([string(credentialsId: 'snykAPI', variable: 'SNYK_TOKEN')]) {
-                    sh 'snyk auth ${SNYK_TOKEN}'
-                    sh 'snyk container test ${APP_IMAGE_NAME}:latest --policy-path=.snyk'
-                    }
-                 }
-            }
-        }
-        stage('Login to Nexus Repository') {
-            steps {
-                script {
-                    withCredentials([usernamePassword(credentialsId: "${NEXUS_CREDENTIALS_ID}", passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
-                        sh "docker login -u ${USERNAME} -p ${PASSWORD} ${NEXUS_PROTOCOL}://${NEXUS_URL}/repository/${NEXUS_REPOSITORY}"
-                    }
-                }
-            }
-        }
-        stage('Tag and Push To Nexus') {
-            steps {
-                script {
-                sh '''
-                    docker tag ${APP_IMAGE_NAME}:latest ${NEXUS_URL}/${APP_IMAGE_NAME}:${IMAGE_TAG}
-                    docker push ${NEXUS_URL}/${APP_IMAGE_NAME}:${IMAGE_TAG}
-                    docker tag ${WEB_IMAGE_NAME}:latest ${NEXUS_URL}/${WEB_IMAGE_NAME}:${IMAGE_TAG}
-                    docker push ${NEXUS_URL}/${WEB_IMAGE_NAME}:${IMAGE_TAG}
-                 '''
-                }
-            }
-        }
-        stage('Tag and push images') {
-             steps {
-                 script {
-                     withCredentials(
-                     [usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASS')]){
-                     sh '''
-                     docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASS}
-                     docker tag ${APP_IMAGE_NAME}:latest ${DOCKER_USERNAME}/${APP_IMAGE_NAME}:${IMAGE_TAG}
-                     docker push ${DOCKER_USERNAME}/${APP_IMAGE_NAME}:${IMAGE_TAG}
-                     docker tag ${WEB_IMAGE_NAME}:latest ${DOCKER_USERNAME}/${WEB_IMAGE_NAME}:${IMAGE_TAG}
-                     docker push ${DOCKER_USERNAME}/${WEB_IMAGE_NAME}:${IMAGE_TAG}
-                     '''
-                     }
-                 }
-             }
-        }
-        stage('Trigger Deploy') {
-            steps {
-                echo "Deploy to k8s"
-            }
-        }
-        stage('Deploy to kubernetes') {
-            steps {
-                script {
+                 container ('docker') {
+                    // Build Docker image using docker-compose
                     sh '''
-                    echo "kubectl could not be found, installing..."
-                    curl -LO "https://dl.k8s.io/release/v1.24.0/bin/linux/amd64/kubectl"
-                    chmod +x ./kubectl
-                    echo "Deploying to k8s cluster"
-                    ./kubectl apply -f k8s/app-deployment.yaml
-                    ./kubectl apply -f k8s/app-service.yaml
+                    /usr/local/bin/docker-compose -f ${DOCKER_COMPOSE_FILE} build
                     '''
                 }
             }
         }
-     }
+
+      stage('Update Manifests') {
+            steps {
+                script {
+                    // Assuming you build a Docker image and tag it
+                    //def dockerImageTag = ${IMAGE_TAG}
+
+                    // Update the Kubernetes manifests (e.g., deployment.yaml) with the new image tag
+                    withCredentials([usernamePassword(credentialsId: "${GIT_CREDENTIALS_ID}", usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                      sh """
+                        git checkout main
+                        git config --global user.email "alexb853@gmail.com"
+                        git config --global user.name "alexb853"
+                        sed -i 's|image: alexb853/web-image:.*|image: alexb853/web-image:${IMAGE_TAG}|g' k8s/web-deployment.yaml
+                        git diff
+                        git add k8s/web-deployment.yaml
+                        git commit -m "Update image to ${IMAGE_TAG}"
+                        git status
+                        git push
+                      """
+                    }
+                }
+            }
+      }
+   }
+
 
     post {
         always {
+            // Clean up the workspace!
             cleanWs()
         }
         success {
@@ -135,4 +106,5 @@ pipeline {
             echo "Build ${BUILD_NUMBER} has failed"
         }
     }
- }
+}
+
